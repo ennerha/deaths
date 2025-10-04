@@ -1,0 +1,277 @@
+# Gráfico estilo "Our World in Data" - EM-DAT (2000-2025)
+# Versão corrigida - sem sobreposição de textos
+# ------------------------------------------------------------
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+from matplotlib.gridspec import GridSpec
+from matplotlib.patches import Rectangle
+
+# ----------------- Configurações de estilo OWID -----------------
+mpl.rcParams['font.family'] = 'sans-serif'
+mpl.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Helvetica']
+mpl.rcParams['font.size'] = 22
+
+# ----------------- Leitura e processamento -----------------
+file_path = "/content/public_emdat_2025-09-29.xlsx"
+sheet_name = "EM-DAT Data"
+
+df = pd.read_excel(file_path, sheet_name=sheet_name)
+df.columns = [c.strip() for c in df.columns]
+
+def find_col(df, keywords):
+    for c in df.columns:
+        low = c.lower()
+        if all(k.lower() in low for k in keywords):
+            return c
+    return None
+
+year_col = find_col(df, ["year"]) or find_col(df, ["start", "year"])
+disaster_group_col = find_col(df, ["disaster", "group"]) or find_col(df, ["group"])
+disaster_type_col = find_col(df, ["disaster", "type"]) or find_col(df, ["type"])
+total_deaths_col = None
+for c in df.columns:
+    if "total" in c.lower() and "death" in c.lower():
+        total_deaths_col = c
+        break
+
+if not all([year_col, disaster_type_col, total_deaths_col]):
+    raise RuntimeError(f"Colunas não encontradas: {df.columns.tolist()}")
+
+df_proc = df[[year_col, disaster_group_col, disaster_type_col, total_deaths_col]].copy()
+df_proc.columns = ["Year", "Disaster Group", "Disaster Type", "Total Deaths"]
+
+df_proc["Year"] = pd.to_numeric(df_proc["Year"], errors="coerce").astype("Int64")
+df_proc["Disaster Type"] = df_proc["Disaster Type"].astype(str).str.strip()
+df_proc["Disaster Group"] = df_proc["Disaster Group"].astype(str).str.strip()
+df_proc["Total Deaths"] = pd.to_numeric(df_proc["Total Deaths"], errors="coerce").fillna(0)
+
+df_proc = df_proc[(df_proc["Year"] >= 2000) & (df_proc["Year"] <= 2025)]
+df_proc = df_proc[df_proc["Disaster Group"].str.contains("Natural", case=False, na=False)].copy()
+
+# ----------------- Padronização de tipos -----------------
+mapping = {
+    'drought': 'Droughts',
+    'flood': 'Floods',
+    'riverine': 'Floods',
+    'flash flood': 'Floods',
+    'earthquake': 'Earthquakes',
+    'volcanic activity': 'Volcanic activity',
+    'volcano': 'Volcanic activity',
+    'storm': 'Storms',
+    'tropical cyclone': 'Storms',
+    'tropical storm': 'Storms',
+    'hurricane': 'Storms',
+    'extreme temperature': 'Extreme temperature',
+    'heat wave': 'Extreme temperature',
+    'cold wave': 'Extreme temperature',
+    'landslide': 'Landslides',
+    'mudslide': 'Landslides',
+    'wildfire': 'Wildfires',
+    'forest fire': 'Wildfires',
+}
+
+def standardize_type(t):
+    low = t.lower()
+    for k, v in mapping.items():
+        if k in low:
+            return v
+    return None
+
+df_proc['DisType_std'] = df_proc['Disaster Type'].apply(standardize_type)
+df_proc = df_proc.dropna(subset=['DisType_std'])
+
+agg = df_proc.groupby(['Year', 'DisType_std'], as_index=False)['Total Deaths'].sum()
+all_year = df_proc.groupby(['Year'], as_index=False)['Total Deaths'].sum()
+
+# Ordem e cores como no OWID
+disaster_config = [
+    ('Droughts', '#5778a4'),
+    ('Floods', '#6a9dc9'),
+    ('Earthquakes', '#b07aa1'),
+    ('Volcanic activity', '#e49444'),
+    ('Storms', '#9270a5'),
+    ('Extreme temperature', '#c93f48'),
+    ('Landslides', '#7aa457'),
+    ('Wildfires', '#d48d3b')
+]
+
+types_present = [t for t, _ in disaster_config if t in agg['DisType_std'].unique()]
+color_map = {t: c for t, c in disaster_config}
+type_to_y = {t: i for i, t in enumerate(reversed(types_present))}
+agg['y'] = agg['DisType_std'].map(type_to_y)
+
+def human_format(num):
+    num = int(num)
+    if num >= 1e6:
+        return f"{num/1e6:.1f}M".replace('.0M', 'M')
+    if num >= 1e3:
+        return f"{num/1e3:.0f}k" if num >= 100000 else f"{num/1e3:.0f},{num%1000:03d}"
+    return f"{num:,}"
+
+max_death = max(all_year['Total Deaths'].max(), agg['Total Deaths'].max(), 1)
+
+def bubble_size(deaths, scale=350):
+    return (np.sqrt(deaths + 1) / np.sqrt(max_death)) * scale
+
+# ----------------- Construção da figura -----------------
+fig = plt.figure(figsize=(18, 12), facecolor='#f0f0f0')
+gs = GridSpec(nrows=2, ncols=1, height_ratios=[2, 8], hspace=0.08,
+              top=0.93, bottom=0.05, left=0.08, right=0.97)
+
+# --------------- Painel superior: All disasters ---------------
+ax_top = fig.add_subplot(gs[0, 0])
+ax_top.set_facecolor('#f0f0f0')
+ax_top.get_yaxis().set_visible(False)
+
+x_all = all_year['Year'].values
+y_all = np.zeros_like(x_all) + 0.5
+sizes_all = bubble_size(all_year['Total Deaths'].values, scale=1800)
+ax_top.scatter(x_all, y_all, s=sizes_all, color='#932432', 
+               edgecolors='white', linewidth=1.2, alpha=0.85, zorder=3)
+
+# Anotações principais - apenas os 4 maiores para evitar sobreposição
+top_years = all_year.sort_values('Total Deaths', ascending=False).head(4)
+for idx, row in top_years.iterrows():
+    yr = int(row['Year'])
+    val = row['Total Deaths']
+    lab = human_format(val)
+    ax_top.annotate(lab, xy=(yr, 0.5), xytext=(0, 40),
+                    textcoords='offset points', ha='center', va='bottom',
+                    fontsize=16, fontweight='bold', color='#1a1a1a')
+
+ax_top.set_xlim(1998, 2027)
+ax_top.set_ylim(0, 1)
+for spine in ax_top.spines.values():
+    spine.set_visible(False)
+ax_top.set_xticks([])
+
+# Texto "All disasters" à esquerda
+ax_top.text(-0.015, 0.5, 'All disasters', transform=ax_top.transAxes,
+            fontsize=20, fontweight='bold', va='center', ha='right')
+
+# --------------- Painel inferior: tipos por linha ---------------
+ax = fig.add_subplot(gs[1, 0])
+ax.set_facecolor('#f0f0f0')
+
+# Linhas pontilhadas
+for t, y in type_to_y.items():
+    ax.hlines(y, 2000, 2025, linestyles=':', linewidth=1.2, 
+              color='#999999', alpha=0.6, zorder=1)
+
+# Bolhas por tipo
+for t in types_present:
+    sub = agg[agg['DisType_std'] == t]
+    if sub.empty:
+        continue
+    xs = sub['Year'].values
+    ys = sub['y'].values
+    ss = bubble_size(sub['Total Deaths'].values, scale=900)
+    ax.scatter(xs, ys, s=ss, color=color_map[t], 
+               edgecolors='white', linewidth=1.0, alpha=0.85, zorder=2)
+
+# Labels dos tipos à esquerda
+yticks = list(type_to_y.values())
+ylabels = list(type_to_y.keys())
+ax.set_yticks(yticks)
+ax.set_yticklabels(ylabels, fontsize=20, fontweight='bold')
+ax.set_ylim(-0.7, max(yticks) + 0.7)
+ax.set_xlim(1998, 2027)
+ax.invert_yaxis()
+
+# Eixo X
+ax.set_xlabel("Year", fontsize=20, fontweight='bold', labelpad=8)
+ax.set_xticks(np.arange(2000, 2026, 5))
+ax.set_xticklabels([str(x) for x in np.arange(2000, 2026, 5)], 
+                    fontsize=20)
+
+# Anotações de eventos específicos - apenas 1 por categoria para evitar sobreposição
+annotations_placed = {}  # Rastrear anotações por ano para evitar conflitos
+
+for t in types_present:
+    sub = agg[agg['DisType_std'] == t].copy()
+    if sub.empty:
+        continue
+    
+    # Pegar apenas o maior evento de cada categoria
+    topn = sub.sort_values('Total Deaths', ascending=False).head(1)
+    
+    for idx, r in topn.iterrows():
+        # Apenas eventos muito significativos
+        if r['Total Deaths'] < max_death * 0.03:
+            continue
+            
+        x = int(r['Year'])
+        y = r['y']
+        val = int(r['Total Deaths'])
+        
+        # Verificar se já existe anotação próxima neste ano
+        if x in annotations_placed:
+            # Pular se houver sobreposição vertical
+            if abs(annotations_placed[x] - y) < 1.5:
+                continue
+        
+        # Formatar label com número de mortes
+        lab = f"{human_format(val)}"
+        
+        # Posicionamento adaptativo baseado em ano e categoria
+        if x < 2008:
+            offset_x, ha = (20, 'left')
+        else:
+            offset_x, ha = (-20, 'right')
+        
+        # Ajustar offset vertical por categoria para evitar conflitos
+        offset_y_map = {
+            'Droughts': -25,
+            'Floods': 20,
+            'Earthquakes': -25,
+            'Volcanic activity': 15,
+            'Storms': -25,
+            'Extreme temperature': 20,
+            'Landslides': 15,
+            'Wildfires': 15
+        }
+        offset_y = offset_y_map.get(t, 15)
+        
+        ax.annotate(lab, xy=(x, y), xytext=(offset_x, offset_y),
+                    textcoords='offset points', fontsize=13, 
+                    color='#1a1a1a', ha=ha, va='center',
+                    fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.3', 
+                             facecolor='white', 
+                             edgecolor='none',
+                             alpha=0.8),
+                    arrowprops=dict(arrowstyle='-', 
+                                   color='#666666', 
+                                   lw=1.0, 
+                                   alpha=0.7))
+        
+        # Registrar posição da anotação
+        annotations_placed[x] = y
+
+# Nota para categorias com poucos dados
+if 'Wildfires' in types_present:
+    wildfire_y = type_to_y['Wildfires']
+    ax.text(2007, wildfire_y, 
+            'Wildfires can cause significant economic, ecological and infrastructural damage. But death tolls are typically low.',
+            fontsize=12, style='italic', color='#555555', va='center')
+
+# Estilo dos spines
+for spine in ['top', 'right', 'left']:
+    ax.spines[spine].set_visible(False)
+ax.spines['bottom'].set_linewidth(1.5)
+ax.spines['bottom'].set_color('#333333')
+ax.tick_params(axis='y', which='both', length=0)
+ax.tick_params(axis='x', which='both', length=5, width=1.5, color='#333333')
+
+# ----------------- Salvamento em alta resolução -----------------
+plt.savefig("emdat_owid_style_2000_2025_fixed.png", dpi=600, bbox_inches='tight', 
+            facecolor='#f0f0f0', edgecolor='none')
+plt.savefig("emdat_owid_style_2000_2025_fixed.svg", bbox_inches='tight', 
+            facecolor='#f0f0f0', edgecolor='none')
+
+print("✓ Gráfico salvo: emdat_owid_style_2000_2025_fixed.png (600 DPI)")
+print("✓ Gráfico salvo: emdat_owid_style_2000_2025_fixed.svg (vetorial)")
+plt.show()
