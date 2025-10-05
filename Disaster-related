@@ -1,5 +1,4 @@
-# Gráfico estilo "Our World in Data" - EM-DAT (2000-2025)
-# Versão corrigida - sem sobreposição de textos
+# EM-DAT (2000-2025)
 # ------------------------------------------------------------
 
 import pandas as pd
@@ -7,14 +6,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.gridspec import GridSpec
-from matplotlib.patches import Rectangle
 
-# ----------------- Configurações de estilo OWID -----------------
+# ----------------- OWID style settings -----------------
 mpl.rcParams['font.family'] = 'sans-serif'
 mpl.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'Helvetica']
-mpl.rcParams['font.size'] = 22
+mpl.rcParams['font.size'] = 20
 
-# ----------------- Leitura e processamento -----------------
+# ----------------- Reading and processing -----------------
 file_path = "/content/public_emdat_2025-09-29.xlsx"
 sheet_name = "EM-DAT Data"
 
@@ -38,7 +36,7 @@ for c in df.columns:
         break
 
 if not all([year_col, disaster_type_col, total_deaths_col]):
-    raise RuntimeError(f"Colunas não encontradas: {df.columns.tolist()}")
+    raise RuntimeError(f"Columns not found: {df.columns.tolist()}")
 
 df_proc = df[[year_col, disaster_group_col, disaster_type_col, total_deaths_col]].copy()
 df_proc.columns = ["Year", "Disaster Group", "Disaster Type", "Total Deaths"]
@@ -51,7 +49,7 @@ df_proc["Total Deaths"] = pd.to_numeric(df_proc["Total Deaths"], errors="coerce"
 df_proc = df_proc[(df_proc["Year"] >= 2000) & (df_proc["Year"] <= 2025)]
 df_proc = df_proc[df_proc["Disaster Group"].str.contains("Natural", case=False, na=False)].copy()
 
-# ----------------- Padronização de tipos -----------------
+# ----------------- Type standardization -----------------
 mapping = {
     'drought': 'Droughts',
     'flood': 'Floods',
@@ -86,7 +84,7 @@ df_proc = df_proc.dropna(subset=['DisType_std'])
 agg = df_proc.groupby(['Year', 'DisType_std'], as_index=False)['Total Deaths'].sum()
 all_year = df_proc.groupby(['Year'], as_index=False)['Total Deaths'].sum()
 
-# Ordem e cores como no OWID
+# Order and colors as in OWID
 disaster_config = [
     ('Droughts', '#5778a4'),
     ('Floods', '#6a9dc9'),
@@ -106,41 +104,65 @@ agg['y'] = agg['DisType_std'].map(type_to_y)
 def human_format(num):
     num = int(num)
     if num >= 1e6:
-        return f"{num/1e6:.1f}M".replace('.0M', 'M')
+        val = num/1e6
+        return f"{val:.1f}M" if val < 10 else f"{val:.0f}M"
     if num >= 1e3:
-        return f"{num/1e3:.0f}k" if num >= 100000 else f"{num/1e3:.0f},{num%1000:03d}"
+        return f"{num/1e3:.0f}k"
     return f"{num:,}"
 
 max_death = max(all_year['Total Deaths'].max(), agg['Total Deaths'].max(), 1)
 
-def bubble_size(deaths, scale=350):
-    return (np.sqrt(deaths + 1) / np.sqrt(max_death)) * scale
+# MUCH IMPROVED SIZE FUNCTION - more visible and representative bubbles
+def bubble_size(deaths, scale_factor=8000):
+    """
+    Uses optimized logarithmic scale for maximum visibility
+    dramatically increased scale_factor
+    """
+    # Avoid log(0)
+    deaths_safe = np.maximum(deaths, 1)
+    
+    # Logarithmic scale with smoother progression
+    normalized = np.log10(deaths_safe + 1) / np.log10(max_death + 1)
+    
+    # Much larger minimum size to ensure visibility
+    min_size = 150
+    
+    # Reduced exponent for better differentiation
+    return min_size + (normalized ** 0.5) * scale_factor
 
-# ----------------- Construção da figura -----------------
-fig = plt.figure(figsize=(18, 12), facecolor='#f0f0f0')
-gs = GridSpec(nrows=2, ncols=1, height_ratios=[2, 8], hspace=0.08,
-              top=0.93, bottom=0.05, left=0.08, right=0.97)
+# ----------------- Figure construction (larger) -----------------
+fig = plt.figure(figsize=(22, 14), facecolor='#f0f0f0')
+gs = GridSpec(nrows=2, ncols=1, height_ratios=[1.5, 8], hspace=0.12,
+              top=0.94, bottom=0.06, left=0.09, right=0.97)
 
-# --------------- Painel superior: All disasters ---------------
+# --------------- Top panel: All disasters ---------------
 ax_top = fig.add_subplot(gs[0, 0])
 ax_top.set_facecolor('#f0f0f0')
 ax_top.get_yaxis().set_visible(False)
 
 x_all = all_year['Year'].values
 y_all = np.zeros_like(x_all) + 0.5
-sizes_all = bubble_size(all_year['Total Deaths'].values, scale=1800)
-ax_top.scatter(x_all, y_all, s=sizes_all, color='#932432', 
-               edgecolors='white', linewidth=1.2, alpha=0.85, zorder=3)
+sizes_all = bubble_size(all_year['Total Deaths'].values, scale_factor=12000)
+ax_top.scatter(x_all, y_all, s=sizes_all, color='#932432',
+               edgecolors='white', linewidth=2.5, alpha=0.95, zorder=3)
 
-# Anotações principais - apenas os 4 maiores para evitar sobreposição
-top_years = all_year.sort_values('Total Deaths', ascending=False).head(4)
+# Main annotations - top 5 events
+top_years = all_year.sort_values('Total Deaths', ascending=False).head(5)
 for idx, row in top_years.iterrows():
     yr = int(row['Year'])
     val = row['Total Deaths']
     lab = human_format(val)
-    ax_top.annotate(lab, xy=(yr, 0.5), xytext=(0, 40),
+    
+    # Adaptive vertical position
+    offset_y = 55 if val > max_death * 0.3 else 45
+    
+    ax_top.annotate(lab, xy=(yr, 0.5), xytext=(0, offset_y),
                     textcoords='offset points', ha='center', va='bottom',
-                    fontsize=16, fontweight='bold', color='#1a1a1a')
+                    fontsize=18, fontweight='bold', color='#1a1a1a',
+                    bbox=dict(boxstyle='round,pad=0.4',
+                             facecolor='white',
+                             edgecolor='none',
+                             alpha=0.9))
 
 ax_top.set_xlim(1998, 2027)
 ax_top.set_ylim(0, 1)
@@ -148,130 +170,117 @@ for spine in ax_top.spines.values():
     spine.set_visible(False)
 ax_top.set_xticks([])
 
-# Texto "All disasters" à esquerda
-ax_top.text(-0.015, 0.5, 'All disasters', transform=ax_top.transAxes,
-            fontsize=20, fontweight='bold', va='center', ha='right')
+# "All disasters" text on the left
+ax_top.text(-0.012, 0.5, 'All disasters', transform=ax_top.transAxes,
+            fontsize=22, fontweight='bold', va='center', ha='right')
 
-# --------------- Painel inferior: tipos por linha ---------------
+# --------------- Bottom panel: types by row ---------------
 ax = fig.add_subplot(gs[1, 0])
 ax.set_facecolor('#f0f0f0')
 
-# Linhas pontilhadas
+# Dotted reference lines
 for t, y in type_to_y.items():
-    ax.hlines(y, 2000, 2025, linestyles=':', linewidth=1.2, 
-              color='#999999', alpha=0.6, zorder=1)
+    ax.hlines(y, 2000, 2025, linestyles=':', linewidth=1.5,
+              color='#aaaaaa', alpha=0.5, zorder=1)
 
-# Bolhas por tipo
+# Bubbles by type - SIGNIFICANTLY INCREASED SIZE
 for t in types_present:
     sub = agg[agg['DisType_std'] == t]
     if sub.empty:
         continue
     xs = sub['Year'].values
     ys = sub['y'].values
-    ss = bubble_size(sub['Total Deaths'].values, scale=900)
-    ax.scatter(xs, ys, s=ss, color=color_map[t], 
-               edgecolors='white', linewidth=1.0, alpha=0.85, zorder=2)
+    ss = bubble_size(sub['Total Deaths'].values, scale_factor=8000)
+    ax.scatter(xs, ys, s=ss, color=color_map[t],
+               edgecolors='white', linewidth=2, alpha=0.95, zorder=2)
 
-# Labels dos tipos à esquerda
+# Type labels on the left
 yticks = list(type_to_y.values())
 ylabels = list(type_to_y.keys())
 ax.set_yticks(yticks)
 ax.set_yticklabels(ylabels, fontsize=20, fontweight='bold')
-ax.set_ylim(-0.7, max(yticks) + 0.7)
+ax.set_ylim(-0.8, max(yticks) + 0.8)
 ax.set_xlim(1998, 2027)
 ax.invert_yaxis()
 
-# Eixo X
-ax.set_xlabel("Year", fontsize=20, fontweight='bold', labelpad=8)
+# X axis
+ax.set_xlabel("Year", fontsize=22, fontweight='bold', labelpad=10)
 ax.set_xticks(np.arange(2000, 2026, 5))
-ax.set_xticklabels([str(x) for x in np.arange(2000, 2026, 5)], 
+ax.set_xticklabels([str(x) for x in np.arange(2000, 2026, 5)],
                     fontsize=20)
 
-# Anotações de eventos específicos - apenas 1 por categoria para evitar sobreposição
-annotations_placed = {}  # Rastrear anotações por ano para evitar conflitos
-
+# Main event annotations - more selective
 for t in types_present:
     sub = agg[agg['DisType_std'] == t].copy()
     if sub.empty:
         continue
-    
-    # Pegar apenas o maior evento de cada categoria
-    topn = sub.sort_values('Total Deaths', ascending=False).head(1)
-    
+
+    # Top 2 most significant events in each category
+    threshold = max(sub['Total Deaths'].max() * 0.4, max_death * 0.02)
+    topn = sub[sub['Total Deaths'] >= threshold].sort_values('Total Deaths', ascending=False).head(2)
+
     for idx, r in topn.iterrows():
-        # Apenas eventos muito significativos
-        if r['Total Deaths'] < max_death * 0.03:
-            continue
-            
         x = int(r['Year'])
         y = r['y']
         val = int(r['Total Deaths'])
         
-        # Verificar se já existe anotação próxima neste ano
-        if x in annotations_placed:
-            # Pular se houver sobreposição vertical
-            if abs(annotations_placed[x] - y) < 1.5:
-                continue
-        
-        # Formatar label com número de mortes
-        lab = f"{human_format(val)}"
-        
-        # Posicionamento adaptativo baseado em ano e categoria
-        if x < 2008:
-            offset_x, ha = (20, 'left')
+        lab = human_format(val)
+
+        # Adaptive positioning
+        if x < 2012:
+            offset_x, ha = (25, 'left')
         else:
-            offset_x, ha = (-20, 'right')
-        
-        # Ajustar offset vertical por categoria para evitar conflitos
+            offset_x, ha = (-25, 'right')
+
+        # Vertical offset by category
         offset_y_map = {
-            'Droughts': -25,
-            'Floods': 20,
-            'Earthquakes': -25,
-            'Volcanic activity': 15,
-            'Storms': -25,
-            'Extreme temperature': 20,
-            'Landslides': 15,
-            'Wildfires': 15
+            'Droughts': -30,
+            'Floods': 25,
+            'Earthquakes': -30,
+            'Volcanic activity': 20,
+            'Storms': -30,
+            'Extreme temperature': 25,
+            'Landslides': 20,
+            'Wildfires': 20
         }
-        offset_y = offset_y_map.get(t, 15)
-        
+        offset_y = offset_y_map.get(t, 20)
+
         ax.annotate(lab, xy=(x, y), xytext=(offset_x, offset_y),
-                    textcoords='offset points', fontsize=13, 
+                    textcoords='offset points', fontsize=14,
                     color='#1a1a1a', ha=ha, va='center',
                     fontweight='bold',
-                    bbox=dict(boxstyle='round,pad=0.3', 
-                             facecolor='white', 
+                    bbox=dict(boxstyle='round,pad=0.4',
+                             facecolor='white',
                              edgecolor='none',
-                             alpha=0.8),
-                    arrowprops=dict(arrowstyle='-', 
-                                   color='#666666', 
-                                   lw=1.0, 
+                             alpha=0.9),
+                    arrowprops=dict(arrowstyle='-',
+                                   color='#666666',
+                                   lw=1.2,
                                    alpha=0.7))
-        
-        # Registrar posição da anotação
-        annotations_placed[x] = y
 
-# Nota para categorias com poucos dados
+# Note for wildfires
 if 'Wildfires' in types_present:
     wildfire_y = type_to_y['Wildfires']
-    ax.text(2007, wildfire_y, 
-            'Wildfires can cause significant economic, ecological and infrastructural damage. But death tolls are typically low.',
-            fontsize=12, style='italic', color='#555555', va='center')
+    ax.text(2012, wildfire_y,
+            'Wildfires cause significant damage, but death tolls are typically low.',
+            fontsize=17, style='italic', color='#ffffff', va='center', ha='center')
 
-# Estilo dos spines
+# Spine styling
 for spine in ['top', 'right', 'left']:
     ax.spines[spine].set_visible(False)
-ax.spines['bottom'].set_linewidth(1.5)
+ax.spines['bottom'].set_linewidth(2)
 ax.spines['bottom'].set_color('#333333')
 ax.tick_params(axis='y', which='both', length=0)
-ax.tick_params(axis='x', which='both', length=5, width=1.5, color='#333333')
+ax.tick_params(axis='x', which='both', length=6, width=2, color='#333333')
 
-# ----------------- Salvamento em alta resolução -----------------
-plt.savefig("emdat_owid_style_2000_2025_fixed.png", dpi=600, bbox_inches='tight', 
+# ----------------- Saving -----------------
+plt.savefig("emdat_owid_improved.png", dpi=300, bbox_inches='tight',
             facecolor='#f0f0f0', edgecolor='none')
-plt.savefig("emdat_owid_style_2000_2025_fixed.svg", bbox_inches='tight', 
+plt.savefig("emdat_owid_improved.svg", bbox_inches='tight',
             facecolor='#f0f0f0', edgecolor='none')
 
-print("✓ Gráfico salvo: emdat_owid_style_2000_2025_fixed.png (600 DPI)")
-print("✓ Gráfico salvo: emdat_owid_style_2000_2025_fixed.svg (vetorial)")
+print("✓ Improved chart saved!")
+print(f"  • Maximum deaths: {human_format(max_death)}")
+print(f"  • Types present: {len(types_present)}")
+print(f"  • Years: {all_year['Year'].min()}-{all_year['Year'].max()}")
 plt.show()
